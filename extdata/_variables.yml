@@ -1,0 +1,53 @@
+###User Input Data
+species: human
+gmt: "assets/Human_GOALL_no_GO_iea_May_01_2023_symbol.gmt"
+#design: "design.csv"
+#counts: "counts.csv"
+data:
+    - 
+        group1: "RAll"
+        group2: "CTL"
+        file: "AllBlood.csv"
+    - 
+        group1: "RM"
+        group2: "CTLM"
+        file: "MaleBloodRejection.csv"
+    - 
+        group1: "RF"
+        group2: "CTLF"
+        file: "FemaleBloodRejection.csv"
+    - 
+        group1: "RAll"
+        group2: "DSA+All"
+        file: "AllBloodDSA+.csv"
+    - 
+        group1: "RM"
+        group2: "DSA+M"
+        file: "MaleBloodDSA+.csv"
+    - 
+        group1: "RF"
+        group2: "DSA+F"
+        file: "FemaleBloodDSA+.csv"
+    - 
+        group1: "DSA+ALL"
+        group2: "CTL"
+        file: "DSAvsNorm.csv"
+    - 
+        group1: "DSA+Male"
+        group2: "CTL Male"
+        file: "MaleDSAvsMaleNorm.csv"
+    - 
+        group1: "DSA+Female"
+        group2: "CTL Female"
+        file: "FemaleDSAvsFemaleNorm.csv"
+
+
+
+###Stable Assets
+humanmap: "assets/HGNChelper_currentHumanMap_2023-05-06.csv"
+hgnc: "assets/hgnc_complete_set_2023-05-06.csv"
+rgd: "assets/GENES_RAT_2023-05-06.csv"
+mgi: "assets/MRK_List2_2023-05-06.csv"
+lincs_fda: "assets/LINCS_FDA_Phases_2023-05-05.csv"
+embeddings: "assets/embeddings_2023-03-06.RDS"
+term2name: "assets/term2name_2023-03-06.RDS"

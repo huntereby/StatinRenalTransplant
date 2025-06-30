@@ -1,0 +1,962 @@
+--- 
+title: "A 3 Pod Report"
+author: "CDRL"
+date: "`r Sys.Date()`"
+site: bookdown::bookdown_site
+documentclass: scrreprt
+bibliography: [book.bib, packages.bib]
+link-citations: yes
+---
+
+# About 
+
+This is a 3 Pod Report.
+
+```{r 3PodR, include=FALSE}
+###Global options
+knitr::opts_chunk$set(
+  message = F,
+  warning = F,
+  echo = F,
+  out.width = '100%',
+  out.height = '100%',
+  fig.align = 'center',
+  dpi=300
+)
+options(readr.show_col_types = FALSE,
+        timeout = 999)
+
+source("R/3PodR.R", local = knitr::knit_global())
+```
+
+```{r, include=FALSE}
+# automatically create a bib database for R packages
+knitr::write_bib(c(
+  .packages(), 'bookdown', 'knitr', 'rmarkdown'
+), 'packages.bib')
+```
+
+<!--chapter:end:index.Rmd-->
+
+# Overview
+
+This is an overview of the transcriptomic data.
+
+<!-- ## Experimental Design -->
+```{r, results='asis'}
+if(global_state$using_counts) {
+  global_state$design %>%
+    knitr::knit_child(
+      text = c('',
+               '```{r}',
+               'make_table(.)',
+               '```',
+               ''),
+      envir = environment(),
+      quiet = TRUE
+    ) %>%
+    c("\n\n## Experimental Design\n\n", .) %>%
+    cat(sep = "\n")
+}
+```
+
+<!-- ## Sample PCA -->
+```{r, results='asis'}
+#Input: global state
+pca_plot <- function(X) {
+  plot_data = X$counts %>%
+    column_to_rownames("Symbol") %>%
+    t() %>%
+    prcomp(center = T, scale. = T)
+  
+  plot = plot_data %>%
+    fviz_pca_ind(
+      repel = TRUE,
+      habillage = X$design %>% dplyr::pull(Group),
+      addEllipses = T) + ggtitle(NULL)
+  
+  plot
+}
+
+if (global_state$using_counts) {
+  global_state %>%
+    knitr::knit_child(
+      text = c('',
+               '```{r}',
+               'pca_plot(.)',
+               '```',
+               ''),
+      envir = environment(),
+      quiet = TRUE) %>%
+    c("\n\n## Sample PCA\n\n", .) %>%
+    cat(sep = "\n")
+}
+```
+
+<!-- ## Gene Expression Heatmap -->
+```{r, results='asis'}
+#Input: global_state
+variable_genes_heatmap <- function(X, n = 500) {
+  mat = X$counts %>%
+    column_to_rownames(var = "Symbol") %>%
+    as.matrix()
+  
+  indices = apply(mat, 1, var) %>%
+    order(decreasing = T)
+  
+  mat = mat[indices[1:500], ]
+  mat = t(scale(t(mat)))
+  
+  row_order = seriate(dist(mat), method = "TSP") %>% get_order()
+  
+  min = min(mat, na.rm = T)
+  max = max(mat, na.rm = T)
+  
+  lgd = ComplexHeatmap::Legend(
+    title = NULL,
+    col_fun = circlize::colorRamp2(c(min, 0, max), c("blue", "white", "red")),
+    at = c(min, 0, max),
+    labels = c(round(min, 2), 0, round(max, 2)),
+    direction = "vertical",
+    labels_gp = grid::gpar(fontsize = 8)
+  )
+  
+  group_data = X$design$Group %>% as.factor()
+  
+  group_cols = distinctColorPalette(k = nlevels(group_data)) %>% set_names(levels(group_data))
+  
+  annotation = ComplexHeatmap::HeatmapAnnotation(
+    Group = group_data,
+    show_annotation_name = F,
+    col = list(Group = group_cols),
+    annotation_legend_param = list(
+      Group = list(
+        color_bar = "discrete",
+        title = NULL,
+        direction = "horizontal",
+        title_position = "topcenter",
+        title_gp = grid::gpar(fontsize = 8),
+        labels_gp = grid::gpar(fontsize = 8),
+        nrow = 1
+      )
+    )
+  )
+  
+  ht = ComplexHeatmap::Heatmap(
+    mat,
+    row_order = row_order,
+    top_annotation = annotation,
+    column_names_rot = 45,
+    column_names_gp = grid::gpar(fontsize = 8),
+    show_row_names = FALSE,
+    show_row_dend = FALSE,
+    show_heatmap_legend = FALSE
+  )
+  
+  ComplexHeatmap::draw(
+    ht,
+    padding = unit(c(2, 15, 2, 2), "mm"),
+    heatmap_legend_list = lgd,
+    heatmap_legend_side = "right",
+    annotation_legend_side = "top"
+  )
+  
+}
+
+if (global_state$using_counts) {
+  global_state %>%
+    knitr::knit_child(
+      text = c('',
+               '```{r}',
+               'variable_genes_heatmap(.)',
+               '```',
+               ''),
+      envir = environment(),
+      quiet = TRUE
+    ) %>%
+    c("\n\n## Gene Expression Heatmap\n\n", .) %>%
+    cat(sep = "\n")
+}
+```
+
+## Comparisons
+
+These are experimental comparisons analyzed in the report.
+
+```{r}
+make_table(tibble(Comparison = names(global_state$data)))
+```
+
+<!--chapter:end:01-overview.Rmd-->
+
+# Differentially Expressed Genes
+
+These are visualizations of the differentially expressed genes (DEGs).
+
+## Shared DEGs
+```{r}
+#Input: named list of DEG tables
+combined_deg_heatmap <- function(X, num_genes = 50) {
+  combined_degs <- X %>%
+    map(
+      ~ filter(., pvalue <= 0.05) %>%
+        arrange(desc(abs(log2FoldChange))) %>%
+        slice_head(n = num_genes) %>%
+        pull(Symbol)
+    ) %>%
+    flatten_chr() %>%
+    unique()
+  
+  mat <- X %>%
+    map( ~ filter(., Symbol %in% combined_degs) %>%
+           select(Symbol, log2FoldChange)) %>%
+    bind_rows(.id = "Group") %>%
+    pivot_wider(names_from = Group, values_from = log2FoldChange) %>%
+    column_to_rownames(var = "Symbol") %>%
+    drop_na() %>%
+    as.matrix()
+  
+  min = min(mat, na.rm = T)
+  max = max(mat, na.rm = T)
+  
+  lgd = ComplexHeatmap::Legend(
+    title = "log2FC",
+    col_fun = circlize::colorRamp2(c(min, 0, max), c("blue", "white", "red")),
+    at = c(min, 0, max),
+    labels = c(round(min, 2), 0, round(max, 2)),
+    direction = "vertical",
+    labels_gp = grid::gpar(fontsize = 8),
+    title_gp = grid::gpar(fontsize = 8)
+  )
+  
+  ht = ComplexHeatmap::Heatmap(
+    mat,
+    column_names_rot = 90,
+    column_names_gp = grid::gpar(fontsize = 8),
+    column_names_centered = TRUE,
+    row_names_gp = grid::gpar(fontsize = 4),
+    show_row_names = TRUE,
+    show_row_dend = FALSE,
+    show_column_dend = FALSE,
+    show_heatmap_legend = FALSE
+  )
+  
+  ComplexHeatmap::draw(
+    ht,
+    padding = unit(c(2, 2, 2, 2), "mm"),
+    heatmap_legend_list = lgd,
+    heatmap_legend_side = "right"
+  )
+  
+}
+
+global_state$data %>%
+  map("data") %>%
+  combined_deg_heatmap()
+```
+
+## Volcano Plots
+```{r, results='asis'}
+#Input: DEG table
+volcano_plot <- function(X, showFDRLine=TRUE, alpha = 0.05) {
+  top10 <- X %>%
+    filter(pvalue <= alpha) %>%
+    arrange(desc(abs(log2FoldChange))) %>%
+    slice_head(n = 10) %>%
+    pull(Symbol)
+
+  #adjusted p values
+  if (showFDRLine) {
+    X$padj = p.adjust(X$pvalue, method = "fdr")
+    closest_row <- X[which.min(abs(X$padj - alpha)), ]
+    closest_pvalue <- closest_row$pvalue
+    
+    #label
+    ns <- paste0("NS (", sum(X$padj > alpha), ")")
+    up <-
+      paste0("Up (", sum(X$padj <= alpha &
+                           X$log2FoldChange > 0), ")")
+    down <-
+      paste0("Down (", sum(X$padj <= alpha &
+                             X$log2FoldChange < 0), ")")
+    
+    X <- X %>%
+      mutate(
+        Significant = case_when(
+          padj > alpha ~ "NS",
+          padj <= alpha & log2FoldChange >= 0 ~ "Up",
+          padj <= alpha & log2FoldChange < 0 ~ "Down"
+        ) %>% as.factor()
+      )
+      
+  } else {
+    #label
+    ns <- paste0("NS (", sum(X$pvalue > alpha), ")")
+    up <-
+      paste0("Up (", sum(X$pvalue <= alpha &
+                           X$log2FoldChange > 0), ")")
+    down <-
+      paste0("Down (", sum(X$pvalue <= alpha &
+                             X$log2FoldChange < 0), ")")
+    
+    X <- X %>%
+      mutate(
+        Significant = case_when(
+          pvalue > alpha ~ "NS",
+          pvalue <= alpha & log2FoldChange >= 0 ~ "Up",
+          pvalue <= alpha & log2FoldChange < 0 ~ "Down"
+        ) %>% as.factor()
+      )
+  }
+  
+  plot <- X %>%
+    mutate(
+      top10label = if_else(Symbol %in% top10, Symbol, NA_character_)
+    ) %>%
+    ggplot(aes(
+      x = log2FoldChange,
+      y = -log10(pvalue),
+      col = Significant,
+      label = top10label
+    )) +
+    geom_point() +
+    scale_color_manual(labels = c(down, ns, up),
+                       values = c("blue", "black", "red")) +
+    geom_text_repel() +
+    geom_hline(linetype='dotted', yintercept = -log10(alpha), col = "black") +
+    {if(showFDRLine) geom_hline(linetype='dotted', yintercept = -log10(closest_pvalue), col = "black")} +
+    theme_pubr()
+  return(plot)
+}
+
+global_state$data %>%
+  map( ~ knit_child(
+    text = c(
+      '',
+      '### `r .$name`',
+      '',
+      '```{r}',
+      'volcano_plot(.$data)',
+      '```',
+      ''
+    ),
+    envir = environment(),
+    quiet = TRUE
+  )) %>%
+  list_c() %>%
+  cat(sep = "\n")
+```
+
+<!-- ## Expression of Top DEGs -->
+```{r, results='asis'}
+#Input: globalstate$data list element
+group_count_heatmap <- function(X) {
+  data <- X$data
+  
+  lower <- round(quantile(data$log2FoldChange, 0.10), 3)
+  upper <- round(quantile(data$log2FoldChange, 0.90), 3)
+  
+  filtered <- data %>%
+    filter(pvalue <= 0.05, log2FoldChange >= upper | log2FoldChange <= lower) %>%
+    pull(Symbol)
+  
+  group_design <- global_state$design %>%
+    filter(Group %in% c(X$group1, X$group2))
+  
+  mat <- global_state$counts %>%
+    select(Symbol, group_design %>% pull(Sample)) %>%
+    filter(Symbol %in% filtered) %>%
+    column_to_rownames(var = "Symbol") %>%
+    as.matrix()
+  
+  mat = t(scale(t(mat)))
+  
+  row_order = seriate(dist(mat), method = "TSP") %>% get_order()
+  
+  min = min(mat, na.rm = T)
+  max = max(mat, na.rm = T)
+  
+  lgd = ComplexHeatmap::Legend(
+    title = NULL,
+    col_fun = circlize::colorRamp2(c(min, 0, max), c("blue", "white", "red")),
+    at = c(min, 0, max),
+    labels = c(round(min, 2), 0, round(max, 2)),
+    direction = "vertical",
+    labels_gp = grid::gpar(fontsize = 8)
+  )
+    
+  group_data = group_design$Group %>% as.factor()
+  
+  group_cols = distinctColorPalette(k = nlevels(group_data)) %>% set_names(levels(group_data))
+  
+  annotation = ComplexHeatmap::HeatmapAnnotation(
+    Group = group_data,
+    show_annotation_name = F,
+    col = list(Group = group_cols),
+    annotation_legend_param = list(
+      Group = list(
+        color_bar = "discrete",
+        title = NULL,
+        direction = "horizontal",
+        title_position = "topcenter",
+        title_gp = grid::gpar(fontsize = 8),
+        labels_gp = grid::gpar(fontsize = 8),
+        nrow = 1
+      )
+    )
+  )
+  
+  ht = ComplexHeatmap::Heatmap(
+    mat,
+    row_order = row_order,
+    top_annotation = annotation,
+    column_names_rot = 45,
+    column_names_gp = grid::gpar(fontsize = 8),
+    show_row_names = FALSE,
+    show_row_dend = FALSE,
+    show_heatmap_legend = FALSE
+  )
+  
+  ComplexHeatmap::draw(
+    ht,
+    padding = unit(c(2, 15, 2, 2), "mm"),
+    heatmap_legend_list = lgd,
+    heatmap_legend_side = "right",
+    annotation_legend_side = "top"
+  )
+
+}
+
+if(global_state$using_counts) {
+  global_state$data %>%
+    map( ~ knitr::knit_child(
+      text = c(
+        '',
+        '### `r .$name`',
+        '',
+        '```{r}',
+        'group_count_heatmap(.)',
+        '```',
+        ''
+      ),
+      envir = environment(),
+      quiet = TRUE
+    )) %>%
+    c("\n\n## Expression of Top DEGs\n\n", .) %>%
+    list_c() %>%
+    cat(sep = "\n")
+}
+```
+
+<!--chapter:end:02-deg_visualization.Rmd-->
+
+# GSEA
+
+This is GSEA.
+
+## Pathways
+
+These are GSEA pathways.
+
+```{r, results='asis'}
+global_state$data %<>%
+  map(~ update_list(
+    .,
+    bpn = do_gsea_pod(
+      .$bpn,
+      gmtfile = paste0("extdata/", global_state$gmt),
+      rankWithSignificance = TRUE,
+      species = NULL,
+      useFDR = FALSE,
+    )
+  ))
+
+
+global_state$data %>%
+  map(~ knit_child(
+    "Rmd/gsea_pathways.Rmd",
+    envir = environment(),
+    quiet = TRUE
+  )) %>%
+  list_c() %>%
+  cat(sep = "\n")
+``` 
+
+## Leading Edge
+
+These are leading edge genes.
+
+```{r, results='asis'}
+global_state$data %<>%
+   map(~ update_list(., bpn = do_leading_pod(.$bpn)))
+
+global_state$data %>%
+  map(~ knit_child(
+    "Rmd/gsea_le.Rmd",
+    envir = environment(),
+    quiet = TRUE
+  )) %>%
+  list_c() %>%
+  cat(sep = "\n")
+``` 
+
+## PAVER
+
+These are PAVER plots of the pathways from all comparisons
+
+```{r, results='asis'}
+input = global_state$data %>%
+  map(~ bind_rows(.$bpn@gsea@sig_pos_enriched, .$bpn@gsea@sig_neg_enriched)) %>%
+  bind_rows(.id = "Group") %>%
+  select(GOID = pathway, NES, Group) %>%
+  mutate(GOID = str_split_i(GOID, "%", -1)) %>%
+  distinct(GOID, Group, .keep_all = T) %>%
+  pivot_wider(names_from = Group, values_from = NES)
+
+minClusterSize = 5
+maxCoreScatter = 0.33
+minGap = (1 - maxCoreScatter) * 3 / 4
+
+GSEA_PAVER_result <- quiet(PAVER::prepare_data(input, global_state$embeddings, global_state$term2name) %>%
+  PAVER::generate_themes(maxCoreScatter = maxCoreScatter,
+  minGap = minGap,
+  minClusterSize = minClusterSize))
+
+global_state$results <- c(global_state$results, lst(GSEA_PAVER_result))
+
+list(GSEA_PAVER_result, "NES") %>%
+  knit_child(text = readLines("Rmd/paver_report.Rmd"),
+             envir = environment(),
+             quiet = TRUE) %>%
+  cat(sep = "\n")
+```
+
+<!--chapter:end:03-gsea.Rmd-->
+
+# Enrichr
+
+This is Enrichr.
+
+## Pathways
+
+These are Enrichr pathways.
+
+```{r, results='asis'}
+global_state$data %<>%
+  map( ~ update_list(., bpn = {system("sleep 3"); quiet(do_enrichr_pod(.$bpn, useFDR=FALSE))}))
+
+global_state$data %>%
+  map(~ knit_child(
+    "Rmd/enrichr_pathways.Rmd",
+    envir = environment(),
+    quiet = TRUE
+  )) %>%
+  list_c() %>%
+  cat(sep = "\n")
+```
+
+## PAVER
+
+These are PAVER plots of the pathways from all comparisons
+
+```{r, results='asis'}
+input = global_state$data %>%
+  map(~ bind_rows(.$bpn@enrichr@sig_up_enrichr, .$bpn@enrichr@sig_down_enrichr %>% mutate(Combined.Score = Combined.Score * -1))) %>%
+  bind_rows(.id = "Group") %>%
+  select(GOID = Term, CS = Combined.Score, Group) %>%
+  mutate(CS = sign(CS) * log2(abs(CS)) + 1) %>%
+  mutate(GOID = str_extract(GOID, "\\bGO:\\d+")) %>%
+  distinct(GOID, Group, .keep_all = T) %>%
+  pivot_wider(names_from = Group, values_from = CS)
+
+minClusterSize = 5
+maxCoreScatter = 0.33
+minGap = (1 - maxCoreScatter) * 3 / 4
+
+ENRICHR_PAVER_result <- quiet(PAVER::prepare_data(input, global_state$embeddings, global_state$term2name) %>%
+  PAVER::generate_themes(maxCoreScatter = maxCoreScatter,
+  minGap = minGap,
+  minClusterSize = minClusterSize))
+
+global_state$results <- c(global_state$results, lst(ENRICHR_PAVER_result))
+
+list(ENRICHR_PAVER_result, "logCS") %>%
+  knit_child(text = readLines("Rmd/paver_report.Rmd"),
+             envir = environment(),
+             quiet = TRUE) %>%
+  cat(sep = "\n")
+```
+
+<!--chapter:end:04-enrichr.Rmd-->
+
+# LINCS
+
+This is LINCS
+
+## Signatures
+
+Putative drug therapies were identified with signature-based connectivity analysis utilizing the Library of Integrated Network-based Signatures (LINCS) database.
+
+```{r, results='asis'}
+#Input: Annotated DrugFindr investigate signature results
+generate_moa_report <- function(X) {
+  X %>%
+    select(integratedMoas, Target, GeneTargets) %>%
+    filter(integratedMoas != "" & !is.na(integratedMoas)) %>%
+    separate_rows(integratedMoas, sep = "\\|") %>%
+    separate_rows(GeneTargets, sep = "\\|") %>%
+    mutate(across(c(integratedMoas, GeneTargets), str_trim)) %>%
+    group_by(integratedMoas) %>%
+    summarise(
+      Target = paste(unique(Target), collapse = "|"),
+      GeneTargets = paste(unique(GeneTargets), collapse = "|"),
+      N = n()
+    ) %>%
+    arrange(desc(N))
+}
+
+#Input: Annotated DrugFindr investigate signature results | DEG data
+generate_gene_report <- function(X, data) {
+  X %>%
+    select(Symbol = GeneTargets) %>%
+    filter(Symbol != "" & !is.na(Symbol)) %>%
+    separate_rows(Symbol, sep = "\\|") %>%
+    mutate(Symbol = str_trim(Symbol)) %>%
+    count(Symbol) %>%
+    arrange(desc(n)) %>%
+    inner_join(global_state$hgnc, by = "Symbol") %>%
+    inner_join(data, by = "Symbol")
+}
+
+#Input: DEG signature
+#Output: Named list of relevant LINCS results
+get_ilincs_results <- function(X) {
+  if(global_state$species != "human") { #convert mouse or rat orthologs to human genes for lincs
+      orthologs <- orthologs(X$Symbol, human = F, species = global_state$species) %>%
+        select(Symbol = human_symbol, Symbol_old = symbol)
+      
+      X <- X %>%
+        rename(Symbol_old = Symbol) %>%
+        inner_join(orthologs, by = "Symbol_old") %>%
+        select(-Symbol_old)
+  }
+  
+  signatures <- investigateSignature(
+    X,
+    filterThreshold = 0,
+    outputLib = "CP",
+    geneColumn = "Symbol",
+    logfcColumn = "log2FoldChange",
+    pvalColumn = "pvalue"
+  )
+  
+  concordant <- signatures %>%
+    filter(Similarity >= 0) %>% inner_join(get_ilincs_metadata(.$TargetSignature), by = "TargetSignature") %>%
+    left_join(global_state$lincs_fda, by = c("Target" = "sm_name"))
+    
+  discordant <- signatures %>%
+    filter(Similarity < 0) %>% inner_join(get_ilincs_metadata(.$TargetSignature), by = "TargetSignature") %>%
+    left_join(global_state$lincs_fda, by = c("Target" = "sm_name"))
+  
+  concordant_moa_report <- generate_moa_report(concordant)
+  discordant_moa_report <- generate_moa_report(discordant)
+  
+  concordant_gene_report <- generate_gene_report(concordant, X)
+  discordant_gene_report <- generate_gene_report(discordant, X)
+  
+  discordant_pathways <- do_enrichr(discordant_gene_report$Symbol) 
+  system("sleep 3")
+  concordant_pathways <- do_enrichr(concordant_gene_report$Symbol)
+  
+  lst(concordant,
+    discordant,
+    concordant_moa_report,
+    discordant_moa_report,
+    concordant_gene_report,
+    discordant_gene_report,
+    discordant_pathways,
+    concordant_pathways)
+}
+
+global_state$data %<>%
+  map(~ update_list(., results = c(.$results, lincs = list(get_ilincs_results(.$data)))))
+
+global_state$data %>%
+  map(~ knit_child("Rmd/lincs_signatures.Rmd", envir = environment(), quiet = TRUE)) %>%
+  list_c() %>%
+  cat(sep = "\n")
+```
+
+## MOAS and Genes
+
+These are LINCS Perturbagens MoAs and Genetargets
+
+```{r, results='asis'}
+global_state$data %>%
+  map(~ knit_child("Rmd/lincs_metadata.Rmd", envir = environment(), quiet = TRUE)) %>%
+  list_c() %>%
+  cat(sep = "\n")
+```
+
+## Pathways
+
+These are LINCS Pathways
+
+```{r, results='asis'}
+global_state$data %>%
+  map(~ knit_child("Rmd/lincs_pathways.Rmd", envir = environment(), quiet = TRUE)) %>%
+  list_c() %>%
+  cat(sep = "\n")
+```
+
+## PAVER
+
+These are PAVER plots of the pathways from all comparisons
+
+```{r, results='asis'}
+input = global_state$data %>%
+  map(~ bind_rows(.$results$lincs$concordant_pathways, .$results$lincs$discordant_pathways %>% mutate(Combined.Score = Combined.Score * -1))) %>%
+  bind_rows(.id = "Group") %>%
+  select(GOID, CS = Combined.Score, Group) %>%
+  mutate(CS = sign(CS) * log2(abs(CS)) + 1) %>%
+  mutate(Type = ifelse(CS > 0, "C", "D")) %>%
+  pivot_wider(names_from = c(Group, Type), values_from = CS, names_sep = "-")
+
+minClusterSize = 5
+maxCoreScatter = 0.33
+minGap = (1 - maxCoreScatter) * 3 / 4
+
+LINCS_PAVER_result <- quiet(PAVER::prepare_data(input, global_state$embeddings, global_state$term2name) %>%
+  PAVER::generate_themes(maxCoreScatter = maxCoreScatter,
+  minGap = minGap,
+  minClusterSize = minClusterSize))
+
+global_state$results <- c(global_state$results, lst(LINCS_PAVER_result))
+
+list(LINCS_PAVER_result, "logCS") %>%
+  knit_child(text = readLines("Rmd/paver_report.Rmd"),
+             envir = environment(),
+             quiet = TRUE) %>%
+  cat(sep = "\n")
+```
+
+<!--chapter:end:05-lincs.Rmd-->
+
+# Pods
+
+These are all possible overlaps of pathways across all possible comparisons.
+
+```{r}
+plot = global_state$results %>%
+  map( ~ pluck(., "prepared_data")) %>%
+  set_names(c("GSEA", "Enrichr", "LINCS")) %>%
+  bind_rows(.id = "Pod") %>%
+  mutate(Group = str_replace(Group, "-C|-D", "")) %>%
+  mutate(ID = paste0(Group, "_", Pod)) %>%
+  select(ID, GOID) %>%
+  group_by(GOID) %>%
+  summarise(ID = list(ID)) %>%
+  filter(!(str_detect(ID, "LINCS") & !str_detect(ID, "GSEA|Enrichr"))) %>%
+  ggplot(aes(x = ID)) +
+  geom_bar() +
+  theme_pubr() +
+  scale_x_upset() +
+  labs(x = NULL, y = "Pathways")
+
+plot
+
+```
+
+## 2 Pod
+
+These are overlaps between each datasets GSEA and EnrichR results
+
+```{r, results='asis'}
+plots = global_state$results %>%
+  map( ~ pluck(., "prepared_data")) %>%
+  set_names(c("GSEA", "Enrichr", "LINCS")) %>%
+  bind_rows(.id = "Pod") %>%
+  filter(Pod != "LINCS") %>%
+  group_by(Group, Pod) %>%
+  summarise(GOID = list(GOID)) %>%
+  group_by(Group) %>%
+  nest() %>%
+  transmute(Group, data = map(data, ~deframe(.))) %>%
+  deframe() %>%
+  map(~ ggVennDiagram(.)) %>% .[order(names(.))]
+
+data = global_state$results %>%
+  map(~ pluck(., "prepared_data")) %>%
+  set_names(c("GSEA", "Enrichr", "LINCS")) %>%
+  bind_rows(.id = "Pod") %>%
+  filter(Pod != "LINCS") %>%
+  mutate(value = ifelse(Pod == "Enrichr" | Pod == "LINCS", sign(value) * 2^(abs(value)-1), value)) %>%
+  group_by(Group) %>%
+  nest %>%
+  deframe() %>%
+  map(
+    ~ list(
+      `Top 10` = .x %>% 
+        filter(sign(value) == 1) %>%
+        group_by(GOID) %>%
+        mutate(duplicated = n() > 1) %>%
+        filter(duplicated) %>%
+        ungroup() %>%
+        select(GOID, Pod, value) %>%
+        pivot_wider(names_from = "Pod", values_from = "value") %>%
+        {if(ncol(.) != 1) . = arrange(., desc(GSEA), desc(Enrichr)); .} %>%
+        inner_join(global_state$results$GSEA_PAVER_result$goterms_df) %>%
+        select(-GOID),
+      `Bottom 10` = .x %>% 
+        filter(sign(value) == -1) %>%
+        group_by(GOID) %>%
+        mutate(duplicated = n() > 1) %>%
+        filter(duplicated) %>%
+        ungroup() %>%
+        select(GOID, Pod, value) %>%
+        pivot_wider(names_from = "Pod", values_from = "value") %>%
+        {if(ncol(.) != 1) . = arrange(., GSEA, Enrichr); .} %>%
+        inner_join(global_state$results$GSEA_PAVER_result$goterms_df) %>%
+        select(-GOID)
+    )
+  ) %>% .[order(names(.))]
+
+global_state$results <- c(global_state$results, list(`twopoddata` = data))
+
+list(names(plots) %>% as.list(), plots, data) %>%
+  pmap(~ knit_child(
+    text = c(
+      '',
+      '### `r ..1`',
+      '',
+      '```{r}',
+      'print(..2)',
+      'make_table(..3[[1]], caption = \'Shared Upregulated Pathways\')',
+      'make_table(..3[[2]], caption = \'Shared Downregulated Pathways\')',
+      '```',
+      ''
+    ),
+    envir = environment(),
+    quiet = TRUE
+  )) %>%
+  list_c() %>%
+  cat(sep = "\n")
+```
+
+## 3 Pod
+
+These are overlaps between each datasets GSEA and EnrichR and LINCS results
+
+```{r, results='asis'}
+plots = global_state$results %>%
+  map( ~ pluck(., "prepared_data")) %>%
+  compact() %>%
+  set_names(c("GSEA", "Enrichr", "LINCS")) %>%
+  bind_rows(.id = "Pod") %>%
+  mutate(Group = str_replace(Group, "-C|-D", "")) %>%
+  group_by(Group, Pod) %>%
+  summarise(GOID = list(GOID)) %>%
+  group_by(Group) %>%
+  nest() %>%
+  transmute(Group, data = map(data, ~deframe(.))) %>%
+  deframe() %>%
+  map(~ ggVennDiagram(.)) %>% .[order(names(.))]
+
+data = global_state$results %>%
+  map(~ pluck(., "prepared_data")) %>%
+  compact() %>%
+  set_names(c("GSEA", "Enrichr", "LINCS")) %>%
+  bind_rows(.id = "Pod") %>%
+  mutate(Group = str_replace(Group, "-C|-D", "")) %>%
+  mutate(value = ifelse(Pod == "Enrichr" | Pod == "LINCS", sign(value) * 2^(abs(value)-1), value)) %>%
+  group_by(Group) %>%
+  nest %>%
+  deframe() %>%
+  map(
+    ~ list(
+      `Top 10` = .x %>% 
+        filter(sign(value) == 1) %>%
+        group_by(GOID) %>%
+        mutate(duplicated = n() > 2) %>%
+        filter(duplicated) %>%
+        ungroup() %>%
+        select(GOID, Pod, value) %>%
+        pivot_wider(names_from = "Pod", values_from = "value") %>%
+        {if(ncol(.) != 1) . = arrange(., desc(GSEA), desc(Enrichr)); .} %>%
+        inner_join(global_state$results$GSEA_PAVER_result$goterms_df) %>%
+        select(-GOID),
+      `Bottom 10` = .x %>% 
+        filter(sign(value) == -1) %>%
+        group_by(GOID) %>%
+        mutate(duplicated = n() > 2) %>%
+        filter(duplicated) %>%
+        ungroup() %>%
+        select(GOID, Pod, value) %>%
+        pivot_wider(names_from = "Pod", values_from = "value") %>%
+        {if(ncol(.) != 1) . = arrange(., GSEA, Enrichr); .} %>%
+        inner_join(global_state$results$GSEA_PAVER_result$goterms_df) %>%
+        select(-GOID)
+    )
+  ) %>% .[order(names(.))]
+
+fourpoddata <- data %>% 
+  map(bind_rows) %>%
+  reduce(inner_join, by = "Term") %>%
+  select(Term)
+
+global_state$results <- c(global_state$results, lst(`threepoddata` = data, fourpoddata))
+
+list(names(plots) %>% as.list(), plots, data) %>%
+  pmap(~ knit_child(
+    text = c(
+      '',
+      '### `r ..1`',
+      '',
+      '```{r}',
+      'print(..2)',
+      'make_table(..3[[1]], caption = \'Shared Upregulated Pathways\')',
+      'make_table(..3[[2]], caption = \'Shared Downregulated Pathways\')',
+      '```',
+      ''
+    ),
+    envir = environment(),
+    quiet = TRUE
+  )) %>%
+  list_c() %>%
+  cat(sep = "\n")
+```
+
+<!-- ## 4th Pod -->
+```{r, results='asis'}
+if(nrow(global_state$results$fourpoddata) > 0) {
+  global_state$results$fourpoddata %>%
+    knitr::knit_child(
+    text = c(
+      '',
+      '## 4th Pod',
+      '',
+      'These are the overlaps between each 3 datasets 3rd pod.',
+      '',
+      '```{r}',
+      'make_table(.)',
+      '```',
+      ''
+    ),
+    envir = environment(),
+    quiet = TRUE
+  ) %>%
+    cat(sep = "\n")
+}
+```
+
+<!--chapter:end:06-pods.Rmd-->
+
+# Reproducibility
+
+```{r}
+sessionInfo()
+saveRDS(global_state, file = "global_state.RDS", compress = "xz")
+```
+
+<!--chapter:end:07-reproducibility.Rmd-->
+
