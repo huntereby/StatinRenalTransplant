@@ -1,54 +1,68 @@
-# Load necessary libraries
+# Load libraries
 suppressPackageStartupMessages({
   library(GEOquery)
-  library(DESeq2)
+  library(limma)
   library(dplyr)
   library(tibble)
   library(readr)
+  library(illuminaHumanv4.db)
+  library(AnnotationDbi)
 })
 
-#' Download GSE86216 and compare rosuvastatin to disease signature
-#'
-#' This script downloads GSE86216 using GEOquery, performs a simple
-#' differential expression analysis to obtain a rosuvastatin treatment
-#' signature and then compares this signature to the disease gene
-#' expression profile stored in `extdata/AllBlood.csv`. Genes showing
-#' opposite regulation between the rosuvastatin and disease signatures
-#' are written to `rosuvastatin_vs_disease_discordant.csv`.
-#'
-#' The code assumes sample titles contain "rosuvastatin" and "control" to
-#' denote treatment groups. Modify the pattern extraction below if the
-#' metadata differs.
-
-# download expression set
+# 1. Download and process GSE86216
 gse <- getGEO("GSE86216", GSEMatrix = TRUE)[[1]]
 expr <- exprs(gse)
 pdata <- pData(gse)
 
-# create condition variable from the title
-pdata$Condition <- ifelse(grepl("rosuvastatin", pdata$title, ignore.case = TRUE),
+# 2. Assign condition labels (FollowUp = rosuvastatin, BaseLine = control)
+pdata$Condition <- ifelse(grepl("FollowUp", pdata$title, ignore.case = TRUE),
                           "rosuvastatin", "control")
+pdata$Condition <- factor(pdata$Condition)
 rownames(pdata) <- colnames(expr)
 
-# build DESeq2 object and compute differential expression
-dds <- DESeqDataSetFromMatrix(countData = expr,
-                              colData = pdata,
-                              design = ~ Condition)
-dds <- DESeq(dds)
-res <- results(dds, contrast = c("Condition", "rosuvastatin", "control"))
+# 3. Differential expression with limma
+design <- model.matrix(~ 0 + pdata$Condition)
+colnames(design) <- levels(pdata$Condition)
+fit <- lmFit(expr, design)
+contrast <- makeContrasts(rosuvastatin - control, levels = design)
+fit2 <- contrasts.fit(fit, contrast)
+fit2 <- eBayes(fit2)
 
-# format results
-res_df <- as.data.frame(res) %>%
-  rownames_to_column("Symbol") %>%
-  select(Symbol, drug_logFC = log2FoldChange, drug_pval = pvalue)
+# 4. Extract probe-level DE results
+probe_res <- topTable(fit2, number = Inf, sort.by = "none") %>%
+  rownames_to_column("ProbeID")
 
-# read disease signature
-disease_df <- read_csv(file.path("extdata", "AllBlood.csv"), show_col_types = FALSE) %>%
-  rename(Symbol = 1, disease_logFC = 2, disease_pval = 3) %>%
-  filter(Symbol != "" & !is.na(Symbol))
+# 5. Map probe IDs to HGNC gene symbols
+probe_res$Gene.symbol <- mapIds(
+  illuminaHumanv4.db,
+  keys = probe_res$ProbeID,
+  column = "SYMBOL",
+  keytype = "PROBEID",
+  multiVals = "first"
+)
 
-# join and keep genes with opposite regulation
-discordant <- inner_join(disease_df, res_df, by = "Symbol") %>%
-  filter(sign(disease_logFC) != sign(drug_logFC))
+# 6. Filter for valid gene symbols
+rosu_df <- probe_res %>%
+  filter(!is.na(Gene.symbol)) %>%
+  dplyr::select(Gene.symbol, drug_logFC = logFC, drug_pval = P.Value)
 
+# 7. Load disease signature from CSV
+disease_df <- read_csv("extdata/AllBlood.csv", show_col_types = FALSE) %>%
+  rename_with(~c("Gene.symbol", "disease_logFC", "disease_pval")) %>%
+  filter(Gene.symbol != "" & !is.na(Gene.symbol))
+
+# 8. Join and identify discordant genes
+all_common <- inner_join(rosu_df, disease_df, by = "Gene.symbol")
+discordant <- all_common %>%
+  filter(sign(drug_logFC) != sign(disease_logFC))
+
+# 9. Save discordant genes to CSV
 write_csv(discordant, "rosuvastatin_vs_disease_discordant.csv")
+
+# 10. Calculate and print summary
+num_discordant <- nrow(discordant)
+num_total <- nrow(all_common)
+percent_discordant <- round(100 * num_discordant / num_total, 2)
+
+cat("Discordant gene count:", num_discordant, "/", num_total,
+    sprintf("(%.2f%% negative connectivity)\n", percent_discordant))
